@@ -3,22 +3,16 @@ import { ChakraProvider } from '@chakra-ui/react';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { ReactQueryDevtools } from '@tanstack/react-query-devtools';
 
-import { ContextMenu } from './common/components/context-menu/ContextMenu';
 import ErrorBoundary from './common/components/error-boundary/ErrorBoundary';
+import IdentifyOverlay from './common/components/identify-overlay/IdentifyOverlay';
 import { AppContextProvider } from './common/context/AppContext';
 import { ontimeQueryClient } from './common/queryClient';
-import { socketClientName } from './common/stores/connectionName';
 import { connectSocket } from './common/utils/socket';
 import theme from './theme/theme';
 import { TranslationProvider } from './translation/TranslationProvider';
 import AppRouter from './AppRouter';
 
-// Load Open Sans typeface
-// @ts-expect-error no types from font import
-import('typeface-open-sans');
-
-const preferredClientName = socketClientName.getState().name;
-connectSocket(preferredClientName);
+connectSocket();
 
 function App() {
   return (
@@ -29,13 +23,15 @@ function App() {
             <div className='App'>
               <ErrorBoundary>
                 <TranslationProvider>
-                  <ContextMenu>
-                    <AppRouter />
-                  </ContextMenu>
+                  <IdentifyOverlay />
+                  <AppRouter />
                 </TranslationProvider>
               </ErrorBoundary>
               <ReactQueryDevtools initialIsOpen={false} />
             </div>
+            <ErrorBoundary>
+              <div id='identify-portal' />
+            </ErrorBoundary>
           </BrowserRouter>
         </AppContextProvider>
       </QueryClientProvider>

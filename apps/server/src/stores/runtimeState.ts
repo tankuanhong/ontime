@@ -1,4 +1,4 @@
-import { MaybeNumber, OntimeEvent, Playback, Runtime, TimerState, TimerType } from 'ontime-types';
+import { MaybeNumber, OntimeEvent, Playback, Runtime, TimerPhase, TimerState, TimerType } from 'ontime-types';
 import { calculateDuration, dayInMs } from 'ontime-utils';
 
 import { clock } from '../services/Clock.js';
@@ -10,6 +10,7 @@ import {
   getExpectedFinish,
   getRollTimers,
   getRuntimeOffset,
+  getTimerPhase,
   skippedOutOfEvent,
   updateRoll,
 } from '../services/timerUtils.js';
@@ -23,7 +24,7 @@ const initialRuntime: Runtime = {
   plannedEnd: 0,
   actualStart: null,
   expectedEnd: null,
-};
+} as const;
 
 const initialTimer: TimerState = {
   addedTime: 0,
@@ -32,10 +33,11 @@ const initialTimer: TimerState = {
   elapsed: null,
   expectedFinish: null, // TODO: expected finish could account for midnight, we cleanup in the clients
   finishedAt: null,
+  phase: TimerPhase.None,
   playback: Playback.Stop,
   secondaryTimer: null,
   startedAt: null,
-};
+} as const;
 
 export type RuntimeState = {
   clock: number; // realtime clock
@@ -47,6 +49,7 @@ export type RuntimeState = {
   timer: TimerState;
   // private properties of the timer calculations
   _timer: {
+    forceFinish: MaybeNumber;
     totalDelay: number; // this value comes from rundown service
     pausedAt: MaybeNumber;
     secondaryTarget: MaybeNumber;
@@ -59,9 +62,10 @@ const runtimeState: RuntimeState = {
   publicEventNow: null,
   eventNext: null,
   publicEventNext: null,
-  runtime: initialRuntime,
+  runtime: { ...initialRuntime },
   timer: { ...initialTimer },
   _timer: {
+    forceFinish: null,
     totalDelay: 0,
     pausedAt: null,
     secondaryTarget: null,
@@ -78,12 +82,10 @@ export function clear() {
   runtimeState.eventNext = null;
   runtimeState.publicEventNext = null;
 
-  runtimeState.runtime = {
-    ...initialRuntime,
-    // persist session stuff
-    actualStart: runtimeState.runtime.actualStart,
-    numEvents: runtimeState.runtime.numEvents,
-  };
+  runtimeState.runtime.offset = null;
+  runtimeState.runtime.actualStart = null;
+  runtimeState.runtime.expectedEnd = null;
+  runtimeState.runtime.selectedEventIndex = null;
 
   runtimeState.timer.playback = Playback.Stop;
   runtimeState.clock = clock.timeNow();
@@ -300,8 +302,12 @@ export function start(state: RuntimeState = runtimeState): boolean {
     state.runtime.actualStart = state.clock;
   }
 
+  // update timer phase
+  runtimeState.timer.phase = getTimerPhase(runtimeState);
+
+  // update offset
   state.runtime.offset = getRuntimeOffset(state);
-  state.runtime.expectedEnd = state.runtime.plannedEnd + state.runtime.offset;
+  state.runtime.expectedEnd = state.runtime.plannedEnd - state.runtime.offset;
 
   return true;
 }
@@ -333,21 +339,25 @@ export function addTime(amount: number) {
     return false;
   }
 
-  runtimeState.timer.addedTime += amount;
-  runtimeState.timer.expectedFinish += amount;
-  runtimeState.timer.current += amount;
-
   // handle edge cases
+  // !!! we need to handle side effects before updating the state
   const willGoNegative = amount < 0 && Math.abs(amount) > runtimeState.timer.current;
   const hasFinished = runtimeState.timer.finishedAt !== null;
+
   if (willGoNegative && !hasFinished) {
-    runtimeState.timer.finishedAt = clock.timeNow();
+    // set finished time so side effects are triggered
+    runtimeState._timer.forceFinish = clock.timeNow();
   } else {
     const willGoPositive = runtimeState.timer.current < 0 && runtimeState.timer.current + amount > 0;
     if (willGoPositive) {
       runtimeState.timer.finishedAt = null;
     }
   }
+
+  // we can update the state after handling the side effects
+  runtimeState.timer.addedTime += amount;
+  runtimeState.timer.expectedFinish += amount;
+  runtimeState.timer.current += amount;
 
   // update runtime delays: over - under
   runtimeState.runtime.offset = getRuntimeOffset(runtimeState);
@@ -383,8 +393,12 @@ export function update(): UpdateResult {
     runtimeState.timer.duration = runtimeState.timer.current;
   }
 
+  // update timer phase
+  runtimeState.timer.phase = getTimerPhase(runtimeState);
+
   // update offset
   runtimeState.runtime.offset = getRuntimeOffset(runtimeState);
+  runtimeState.runtime.expectedEnd = getExpectedEnd(runtimeState);
 
   return {
     hasTimerFinished,
@@ -407,16 +421,21 @@ export function update(): UpdateResult {
   function onPlayUpdate() {
     let isFinished = false;
     runtimeState.timer.current = getCurrent(runtimeState);
+    const shouldForceFinish = runtimeState._timer.forceFinish !== null;
     const finishedNow =
-      runtimeState.timer.current <= timerConfig.triggerAhead && runtimeState.timer.finishedAt === null;
+      shouldForceFinish ||
+      (runtimeState.timer.current <= timerConfig.triggerAhead && runtimeState.timer.finishedAt === null);
 
     if (runtimeState.timer.playback === Playback.Play && finishedNow) {
-      runtimeState.timer.finishedAt = runtimeState.clock;
+      runtimeState.timer.finishedAt = runtimeState._timer.forceFinish ?? runtimeState.clock;
       isFinished = true;
     } else {
       runtimeState.timer.expectedFinish = getExpectedFinish(runtimeState);
     }
 
+    if (shouldForceFinish) {
+      runtimeState._timer.forceFinish = null;
+    }
     runtimeState.timer.elapsed = runtimeState.timer.duration - runtimeState.timer.current;
 
     return { isFinished };
@@ -424,10 +443,11 @@ export function update(): UpdateResult {
 }
 
 export function roll(rundown: OntimeEvent[]) {
+  const selectedEventIndex = runtimeState.runtime.selectedEventIndex;
   clear();
-
   runtimeState.runtime.numEvents = rundown.length;
-  const { nextEvent, currentEvent } = getRollTimers(rundown, runtimeState.clock);
+
+  const { nextEvent, currentEvent } = getRollTimers(rundown, runtimeState.clock, selectedEventIndex);
 
   if (currentEvent) {
     // there is something running, load
@@ -446,6 +466,10 @@ export function roll(rundown: OntimeEvent[]) {
       current: endTime - runtimeState.clock,
     });
   } else if (nextEvent) {
+    if (nextEvent.isPublic) {
+      runtimeState.publicEventNext = nextEvent;
+    }
+    runtimeState.eventNext = nextEvent;
     // account for day after
     const nextStart = nextEvent.timeStart < runtimeState.clock ? nextEvent.timeStart + dayInMs : nextEvent.timeStart;
     // nothing now, but something coming up

@@ -25,13 +25,13 @@
     "build": {},
     "build:local": {},
     "build:electron": {},
-    "build:docker": {},
     "build:localdocker": {},
     "e2e": {
       "dependsOn": ["^build"]
     },
     "dist-win": {},
     "dist-mac": {},
+    "dist-mac:local": {},
     "dist-linux": {},
     "cleanup": {}
   }

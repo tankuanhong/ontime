@@ -73,15 +73,15 @@ export function addToCustomAssignment(
  */
 export function handleCustomField(
   customFields: CustomFields,
-  customFieldChangelog: Record<string, string>,
+  customFieldChangelog: Map<string, string>,
   mutableEvent: OntimeEvent,
   assignedCustomFields: Record<string, string[]>,
 ) {
   for (const field in mutableEvent.custom) {
     // rename the property if it is in the changelog
-    if (field in customFieldChangelog) {
+    if (customFieldChangelog.has(field)) {
       const oldData = mutableEvent.custom[field];
-      const newLabel = customFieldChangelog[field];
+      const newLabel = customFieldChangelog.get(field);
 
       mutableEvent.custom[newLabel] = oldData;
       delete mutableEvent.custom[field];
@@ -100,7 +100,7 @@ export function handleCustomField(
 }
 
 /** List of event properties which do not need the rundown to be regenerated */
-enum regenerateWhitelist {
+export enum regenerateWhitelist {
   'id',
   'cue',
   'title',
@@ -120,6 +120,14 @@ enum regenerateWhitelist {
  */
 export function isDataStale(patch: Partial<OntimeRundownEntry>): boolean {
   return Object.keys(patch).some((key) => !(key in regenerateWhitelist));
+}
+
+/**
+ * given a key, returns whether it is whitelisted
+ * @param path
+ */
+export function willCauseRegeneration(key: keyof OntimeEvent): boolean {
+  return !(key in regenerateWhitelist);
 }
 
 /**

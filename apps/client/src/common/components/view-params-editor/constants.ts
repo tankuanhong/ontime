@@ -1,12 +1,10 @@
 import { CustomFields } from 'ontime-types';
 
-import { capitaliseFirstLetter } from '../../../features/viewers/common/viewUtils';
-
-import { ParamField } from './types';
+import { type ParamField } from './types';
 
 const makeOptionsFromCustomFields = (customFields: CustomFields, additionalOptions?: Record<string, string>) => {
-  const customFieldOptions = Object.keys(customFields).reduce((acc, key) => {
-    return { ...acc, [`custom-${key}`]: `Custom: ${capitaliseFirstLetter(key)}` };
+  const customFieldOptions = Object.entries(customFields).reduce((acc, [key, value]) => {
+    return { ...acc, [`custom-${key}`]: `Custom: ${value.label}` };
   }, additionalOptions ?? {});
   return customFieldOptions;
 };
@@ -26,6 +24,14 @@ const hideTimerSeconds: ParamField = {
   id: 'hideTimerSeconds',
   title: 'Hide seconds in timer',
   description: 'Whether to hide seconds in the running timer',
+  type: 'boolean',
+  defaultValue: false,
+};
+
+const showLeadingZeros: ParamField = {
+  id: 'showLeadingZeros',
+  title: 'Show leading zeros in timer',
+  description: 'Whether to show leading zeros in the running timer',
   type: 'boolean',
   defaultValue: false,
 };
@@ -103,16 +109,26 @@ export const getClockOptions = (timeFormat: string): ParamField[] => [
 ];
 
 export const getTimerOptions = (timeFormat: string, customFields: CustomFields): ParamField[] => {
-  const secondaryOptions = makeOptionsFromCustomFields(customFields);
+  const mainOptions = makeOptionsFromCustomFields(customFields, { title: 'Title' });
+  const secondaryOptions = makeOptionsFromCustomFields(customFields, { note: 'Note' });
   return [
     getTimeOption(timeFormat),
     hideTimerSeconds,
+    showLeadingZeros,
     {
       id: 'hideClock',
       title: 'Hide Time Now',
       description: 'Hides the Time Now field',
       type: 'boolean',
       defaultValue: false,
+    },
+    {
+      id: 'main',
+      title: 'Main text',
+      description: 'Select the data source for the main text',
+      type: 'option',
+      values: mainOptions,
+      defaultValue: 'Title',
     },
     {
       id: 'secondary-src',
@@ -227,13 +243,6 @@ export const MINIMAL_TIMER_OPTIONS: ParamField[] = [
     id: 'hideovertime',
     title: 'Hide Overtime',
     description: 'Whether to suppress overtime styles (red borders and red text)',
-    type: 'boolean',
-    defaultValue: false,
-  },
-  {
-    id: 'hidemessages',
-    title: 'Hide Message Overlay',
-    description: 'Whether to hide the overlay from showing timer screen messages',
     type: 'boolean',
     defaultValue: false,
   },
@@ -393,9 +402,9 @@ export const getBackstageOptions = (timeFormat: string, customFields: CustomFiel
     {
       id: 'eventsPerPage',
       title: 'Events per page',
-      description: 'Sets the number of events on the page, can cause overlow',
+      description: 'Sets the number of events on the page, can cause overflow',
       type: 'number',
-      placeholder: '10 (default)',
+      placeholder: '8 (default)',
     },
     {
       id: 'secondary-src',
@@ -430,9 +439,9 @@ export const getPublicOptions = (timeFormat: string, customFields: CustomFields)
     {
       id: 'eventsPerPage',
       title: 'Events per page',
-      description: 'Sets the number of events on the page, can cause overlow',
+      description: 'Sets the number of events on the page, can cause overflow',
       type: 'number',
-      placeholder: '10 (default)',
+      placeholder: '8 (default)',
     },
     {
       id: 'secondary-src',
@@ -453,8 +462,8 @@ export const getStudioClockOptions = (timeFormat: string): ParamField[] => [
 export const getOperatorOptions = (customFields: CustomFields, timeFormat: string): ParamField[] => {
   const fieldOptions = makeOptionsFromCustomFields(customFields, { title: 'Title', note: 'Note' });
 
-  const customFieldSelect = Object.keys(customFields).reduce((acc, key) => {
-    return { ...acc, [key]: `Custom: ${capitaliseFirstLetter(key)}` };
+  const customFieldSelect = Object.entries(customFields).reduce((acc, [key, field]) => {
+    return { ...acc, [key]: { value: key, label: field.label, colour: field.colour } };
   }, {});
 
   return [
@@ -486,9 +495,8 @@ export const getOperatorOptions = (customFields: CustomFields, timeFormat: strin
       id: 'subscribe',
       title: 'Highlight Field',
       description: 'Choose a custom field to highlight',
-      type: 'option',
+      type: 'multi-option',
       values: customFieldSelect,
-      defaultValue: '',
     },
     {
       id: 'shouldEdit',

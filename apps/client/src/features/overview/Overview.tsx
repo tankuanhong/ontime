@@ -95,7 +95,7 @@ function TitlesOverview() {
 }
 
 function TimerOverview() {
-  const {current} = useTimer();
+  const { current } = useTimer();
 
   const display = millisToString(current);
 
@@ -116,7 +116,7 @@ function RuntimeOverview() {
   const { clock, offset } = useRuntimePlaybackOverview();
 
   const offsetText = getOffsetText(offset);
-  const offsetClasses = offset === null ? undefined : offset > 0 ? style.behind : style.ahead;
+  const offsetClasses = offset === null ? undefined : offset <= 0 ? style.behind : style.ahead;
 
   return (
     <>

@@ -1,5 +1,21 @@
-import { HttpSubscription, OscSubscription } from 'ontime-types';
-import { sanitiseHttpSubscriptions, sanitiseOscSubscriptions } from '../parserFunctions.js';
+import {
+  CustomFields,
+  DatabaseModel,
+  EndAction,
+  HttpSubscription,
+  OntimeEvent,
+  OntimeRundown,
+  OscSubscription,
+  SupportedEvent,
+  TimeStrategy,
+  TimerType,
+} from 'ontime-types';
+import {
+  parseRundown,
+  sanitiseCustomFields,
+  sanitiseHttpSubscriptions,
+  sanitiseOscSubscriptions,
+} from '../parserFunctions.js';
 
 describe('sanitiseOscSubscriptions()', () => {
   it('returns an empty array if not an array', () => {
@@ -17,6 +33,8 @@ describe('sanitiseOscSubscriptions()', () => {
       { id: '4', cycle: 'onStop', address: '/test', payload: 'test', enabled: false },
       { id: '5', cycle: 'onUpdate', address: '/test', payload: 'test', enabled: true },
       { id: '6', cycle: 'onFinish', address: '/test', payload: 'test', enabled: false },
+      { id: '7', cycle: 'onWarning', address: '/test', payload: 'test', enabled: false },
+      { id: '8', cycle: 'onDanger', address: '/test', payload: 'test', enabled: false },
     ];
     const sanitationResult = sanitiseOscSubscriptions(oscSubscriptions);
     expect(sanitationResult).toStrictEqual(oscSubscriptions);
@@ -53,6 +71,8 @@ describe('sanitiseHttpSubscriptions()', () => {
       { id: '4', cycle: 'onStop', message: 'http://test', enabled: false },
       { id: '5', cycle: 'onUpdate', message: 'http://test', enabled: true },
       { id: '6', cycle: 'onFinish', message: 'http://test', enabled: false },
+      { id: '7', cycle: 'onWarning', message: 'http://test', enabled: false },
+      { id: '8', cycle: 'onDanger', message: 'http://test', enabled: false },
     ];
     const sanitationResult = sanitiseHttpSubscriptions(httpSubscription);
     expect(sanitationResult).toStrictEqual(httpSubscription);
@@ -69,5 +89,199 @@ describe('sanitiseHttpSubscriptions()', () => {
     ];
     const sanitationResult = sanitiseHttpSubscriptions(httpSubscription as HttpSubscription[]);
     expect(sanitationResult.length).toBe(0);
+  });
+});
+
+describe('sanitiseCustomFields()', () => {
+  it('returns an empty array if not an array', () => {
+    expect(sanitiseCustomFields({})).toEqual({});
+  });
+
+  it('returns an object of valid entries', () => {
+    const customFields: CustomFields = {
+      test: { label: 'test', type: 'string', colour: 'red' },
+      test2: { label: 'test2', type: 'string', colour: 'green' },
+      test3: { label: 'Test3', type: 'string', colour: '' },
+    };
+    const sanitationResult = sanitiseCustomFields(customFields);
+    expect(sanitationResult).toStrictEqual(customFields);
+  });
+
+  it('type is forced to be string', () => {
+    const customFields: CustomFields = {
+      // @ts-expect-error intentional bad data
+      test: { label: 'test', type: 'another', colour: 'red' },
+    };
+    const expectedCustomFields: CustomFields = {
+      test: { label: 'test', type: 'string', colour: 'red' },
+    };
+    const sanitationResult = sanitiseCustomFields(customFields);
+    expect(sanitationResult).toStrictEqual(expectedCustomFields);
+  });
+
+  it('colour must be a string', () => {
+    const customFields: CustomFields = {
+      // @ts-expect-error intentional bad data
+      test: { label: 'test', type: 'string', colour: 5 },
+    };
+    const sanitationResult = sanitiseCustomFields(customFields);
+    expect(sanitationResult).toStrictEqual({});
+  });
+
+  it('label can not be empty', () => {
+    const customFields: CustomFields = {
+      '': { label: '', type: 'string', colour: 'red' },
+    };
+    const sanitationResult = sanitiseCustomFields(customFields);
+    expect(sanitationResult).toStrictEqual({});
+  });
+
+  it('remove extra stuff', () => {
+    const customFields: CustomFields = {
+      // @ts-expect-error intentional bad data
+      test: { label: 'test', type: 'string', colour: 'red', extra: 'should be removed' },
+    };
+    const expectedCustomFields: CustomFields = {
+      test: { label: 'test', type: 'string', colour: 'red' },
+    };
+    const sanitationResult = sanitiseCustomFields(customFields);
+    expect(sanitationResult).toStrictEqual(expectedCustomFields);
+  });
+
+  it('enforece name cohesion', () => {
+    const customFields: CustomFields = {
+      test: { label: 'New Name', type: 'string', colour: 'red' },
+    };
+    const expectedCustomFields: CustomFields = {
+      'new name': { label: 'New Name', type: 'string', colour: 'red' },
+    };
+    const sanitationResult = sanitiseCustomFields(customFields);
+    expect(sanitationResult).toStrictEqual(expectedCustomFields);
+  });
+
+  it('filters invalid entries', () => {
+    const customFields: CustomFields = {
+      test: { label: 'test', type: 'string', colour: 'red' },
+      test2: { label: 'test2', type: 'string', colour: 'green' },
+      bad: { label: '', type: 'string', colour: '' },
+      test3: { label: 'Test3', type: 'string', colour: '' },
+    };
+    const expectedCustomFields: CustomFields = {
+      test: { label: 'test', type: 'string', colour: 'red' },
+      test2: { label: 'test2', type: 'string', colour: 'green' },
+      test3: { label: 'Test3', type: 'string', colour: '' },
+    };
+    const sanitationResult = sanitiseCustomFields(customFields);
+    expect(sanitationResult).toStrictEqual(expectedCustomFields);
+  });
+});
+
+describe('parseRundown() linking', () => {
+  const blankEvent: OntimeEvent = {
+    id: '',
+    type: SupportedEvent.Event,
+    cue: '',
+    title: '',
+    note: '',
+    endAction: EndAction.None,
+    timerType: TimerType.CountDown,
+    linkStart: null,
+    timeStrategy: TimeStrategy.LockDuration,
+    timeStart: 0,
+    timeEnd: 0,
+    duration: 0,
+    isPublic: false,
+    skip: false,
+    colour: '',
+    revision: 0,
+    timeWarning: 120000,
+    timeDanger: 60000,
+    custom: {},
+  };
+
+  it('returns linked events', () => {
+    const data: Partial<DatabaseModel> = {
+      rundown: [
+        {
+          id: '1',
+          type: SupportedEvent.Event,
+          skip: false,
+        } as OntimeEvent,
+        {
+          id: '2',
+          type: SupportedEvent.Event,
+          linkStart: 'true',
+          skip: false,
+        } as OntimeEvent,
+      ],
+    };
+
+    const expected: OntimeRundown = [
+      { ...blankEvent, id: '1', cue: '0' },
+      { ...blankEvent, id: '2', cue: '1', linkStart: '1' },
+    ];
+    const result = parseRundown(data);
+    expect(result).toEqual(expected);
+  });
+
+  it('returns unlinkd if no previous', () => {
+    const data: Partial<DatabaseModel> = {
+      rundown: [
+        {
+          id: '2',
+          type: SupportedEvent.Event,
+          linkStart: 'true',
+          skip: false,
+        } as OntimeEvent,
+      ],
+    };
+
+    const expected: OntimeRundown = [{ ...blankEvent, id: '2', cue: '0' }];
+    const result = parseRundown(data);
+    expect(result).toEqual(expected);
+  });
+
+  it('returns linked events past blocks and delays', () => {
+    const data: Partial<DatabaseModel> = {
+      rundown: [
+        {
+          id: '1',
+          type: SupportedEvent.Event,
+          skip: false,
+        } as OntimeEvent,
+        {
+          id: 'delay1',
+          type: SupportedEvent.Delay,
+          duration: 0,
+        },
+        {
+          id: '2',
+          type: SupportedEvent.Event,
+          linkStart: 'true',
+          skip: false,
+        } as OntimeEvent,
+        {
+          id: 'block1',
+          type: SupportedEvent.Block,
+          title: '',
+        },
+        {
+          id: '3',
+          type: SupportedEvent.Event,
+          linkStart: 'true',
+          skip: false,
+        } as OntimeEvent,
+      ],
+    };
+
+    const expected: OntimeRundown = [
+      { ...blankEvent, id: '1', cue: '0' },
+      { id: 'delay1', type: SupportedEvent.Delay, duration: 0 },
+      { ...blankEvent, id: '2', cue: '1', linkStart: '1' },
+      { id: 'block1', type: SupportedEvent.Block, title: '' },
+      { ...blankEvent, id: '3', cue: '2', linkStart: '2' },
+    ];
+    const result = parseRundown(data);
+    expect(result).toEqual(expected);
   });
 });

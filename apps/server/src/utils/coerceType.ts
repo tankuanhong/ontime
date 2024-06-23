@@ -1,5 +1,18 @@
 import { isColourHex } from 'ontime-utils';
 
+/**
+ * @description Converts a value to an item in the provided enume.
+ * @param {unknown} value - Value to be converted.
+ * @returns {T} - The converted value as key of the enum.
+ * @throws {Error} Throws an error value is not found in the enum.
+ */
+export function coerceEnum<T>(value: unknown, list: object): T {
+  if (typeof value !== 'string' || !Object.values(list).includes(value)) {
+    throw new Error('Invalid value received');
+  }
+  return value as T;
+}
+
 //TODO: write tests
 /**
  * @description Converts a value to a string if possible, throws otherwise
@@ -77,7 +90,12 @@ export function coerceColour(value: unknown): string {
     if (!isColourHex(lowerCaseValue)) {
       throw new Error('Invalid hex colour received');
     }
-  } else if (!(lowerCaseValue in cssColours)) {
+    return lowerCaseValue;
+  }
+  if (lowerCaseValue === '') {
+    return lowerCaseValue; // None colour the same as the UI 'Ø' button
+  }
+  if (!(lowerCaseValue in cssColours)) {
     throw new Error('Invalid colour name received');
   }
   return lowerCaseValue;

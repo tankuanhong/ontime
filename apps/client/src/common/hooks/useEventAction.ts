@@ -1,7 +1,15 @@
 import { useCallback } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { isOntimeEvent, MaybeString, OntimeEvent, OntimeRundownEntry, RundownCached } from 'ontime-types';
-import { getLinkedTimes, getPreviousEventNormal, reorderArray, swapEventData } from 'ontime-utils';
+import {
+  dayInMs,
+  getLinkedTimes,
+  getPreviousEventNormal,
+  MILLIS_PER_SECOND,
+  parseUserTime,
+  reorderArray,
+  swapEventData,
+} from 'ontime-utils';
 
 import { RUNDOWN } from '../api/constants';
 import {
@@ -18,14 +26,13 @@ import {
 } from '../api/rundown';
 import { logAxiosError } from '../api/utils';
 import { useEditorSettings } from '../stores/editorSettings';
-import { forgivingStringToMillis } from '../utils/dateConfig';
 
 /**
- * @description Set of utilities for events
+ * @description Set of utilities for events //TODO: should this be called useEntryAction and so on
  */
 export const useEventAction = () => {
   const queryClient = useQueryClient();
-  const { defaultPublic, linkPrevious, defaultDuration } = useEditorSettings((state) => state.eventSettings);
+  const { defaultPublic, linkPrevious, defaultDuration, defaultWarnTime, defaultDangerTime } = useEditorSettings();
 
   /**
    * Calls mutation to add new event
@@ -48,6 +55,8 @@ export const useEventAction = () => {
       defaultPublic: boolean;
       linkPrevious: boolean;
       lastEventId: string;
+      defaultWarnTime: number;
+      defaultDangerTime: number;
     }>;
 
   /**
@@ -64,6 +73,8 @@ export const useEventAction = () => {
           defaultPublic: options?.defaultPublic ?? defaultPublic,
           lastEventId: options?.lastEventId,
           linkPrevious: options?.linkPrevious ?? linkPrevious,
+          defaultWarnTime,
+          defaultDangerTime,
         };
 
         if (applicationOptions.linkPrevious && applicationOptions?.lastEventId) {
@@ -83,7 +94,15 @@ export const useEventAction = () => {
         }
 
         if (newEvent.duration === undefined && newEvent.timeEnd === undefined) {
-          newEvent.duration = forgivingStringToMillis(defaultDuration);
+          newEvent.duration = parseUserTime(defaultDuration);
+        }
+
+        if (newEvent.timeDanger === undefined) {
+          newEvent.timeDanger = parseUserTime(defaultDangerTime);
+        }
+
+        if (newEvent.timeWarning === undefined) {
+          newEvent.timeWarning = parseUserTime(defaultWarnTime);
         }
       }
 
@@ -98,7 +117,7 @@ export const useEventAction = () => {
         logAxiosError('Failed adding event', error);
       }
     },
-    [_addEventMutation, defaultDuration, defaultPublic, linkPrevious],
+    [_addEventMutation, defaultDangerTime, defaultDuration, defaultPublic, defaultWarnTime, linkPrevious, queryClient],
   );
 
   /**
@@ -198,14 +217,17 @@ export const useEventAction = () => {
       } else if (value.startsWith('+') || value.startsWith('p+') || value.startsWith('p +')) {
         // TODO: is this logic solid?
         const remainingString = value.substring(1);
-        newValMillis = getPreviousEnd() + forgivingStringToMillis(remainingString);
+        newValMillis = getPreviousEnd() + parseUserTime(remainingString);
       } else {
-        newValMillis = forgivingStringToMillis(value);
+        newValMillis = parseUserTime(value);
       }
+
+      // dont allow timer values over 23:59:59
+      const cappedMillis = Math.min(newValMillis, dayInMs - MILLIS_PER_SECOND);
 
       const newEvent = {
         id: eventId,
-        [field]: newValMillis,
+        [field]: cappedMillis,
       };
       try {
         await _updateEventMutation.mutateAsync(newEvent);
@@ -315,7 +337,7 @@ export const useEventAction = () => {
   const _deleteEventMutation = useMutation({
     mutationFn: requestDelete,
     // we optimistically update here
-    onMutate: async (eventId) => {
+    onMutate: async (eventIds: string[]) => {
       // cancel ongoing queries
       await queryClient.cancelQueries({ queryKey: RUNDOWN });
 
@@ -324,9 +346,11 @@ export const useEventAction = () => {
 
       if (previousData) {
         // optimistically update object
-        const newOrder = previousData.order.filter((id) => id !== eventId);
+        const newOrder = previousData.order.filter((id) => !eventIds.includes(id));
         const newRundown = { ...previousData.rundown };
-        delete newRundown[eventId];
+        for (const eventId of eventIds) {
+          delete newRundown[eventId];
+        }
 
         queryClient.setQueryData(RUNDOWN, {
           order: newOrder,
@@ -355,9 +379,9 @@ export const useEventAction = () => {
    * Deletes an event form the list
    */
   const deleteEvent = useCallback(
-    async (eventId: string) => {
+    async (eventIds: string[]) => {
       try {
-        await _deleteEventMutation.mutateAsync(eventId);
+        await _deleteEventMutation.mutateAsync(eventIds);
       } catch (error) {
         logAxiosError('Error deleting event', error);
       }

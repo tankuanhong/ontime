@@ -11,15 +11,15 @@ const dbPath = `${apiEntryUrl}/db`;
 /**
  * HTTP request to the current DB
  */
-async function getDb(): Promise<AxiosResponse<DatabaseModel>> {
-  return axios.get(`${dbPath}/download`);
+async function getDb(filename: string): Promise<AxiosResponse<DatabaseModel>> {
+  return axios.post(`${dbPath}/download/`, { filename });
 }
 
 /**
  * Request download of the current project file
  * @param fileName
  */
-export async function downloadProject(fileName: string = 'ontime-project') {
+export async function downloadProject(fileName: string) {
   try {
     const { data, name } = await fileDownload(fileName);
 
@@ -123,7 +123,7 @@ export async function renameProject(filename: string, newFilename: string): Prom
   const url = `${dbPath}/${filename}/rename`;
   const decodedUrl = decodeURIComponent(url);
   const res = await axios.put(decodedUrl, {
-    newFilename,
+    filename: newFilename,
   });
   return res.data;
 }
@@ -152,7 +152,7 @@ export async function getInfo(): Promise<GetInfo> {
  * @returns
  */
 async function fileDownload(fileName: string): Promise<{ data: DatabaseModel; name: string }> {
-  const response = await getDb();
+  const response = await getDb(fileName);
 
   const headerLine = response.headers['Content-Disposition'];
 

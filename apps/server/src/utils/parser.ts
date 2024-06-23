@@ -34,7 +34,6 @@ import {
   parseViewSettings,
 } from './parserFunctions.js';
 import { parseExcelDate } from './time.js';
-import { coerceBoolean } from './coerceType.js';
 
 export const EXCEL_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 export const JSON_MIME = 'application/json';
@@ -42,6 +41,18 @@ export const JSON_MIME = 'application/json';
 type ExcelData = Pick<DatabaseModel, 'rundown' | 'customFields'> & {
   rundownMetadata: Record<string, { row: number; col: number }>;
 };
+
+function parseBooleanString(value: unknown): boolean {
+  if (typeof value === 'boolean') {
+    return value;
+  }
+
+  // falsy values would be nullish or empty string
+  if (!value || typeof value !== 'string') {
+    return false;
+  }
+  return value.toLowerCase() !== 'false';
+}
 
 export function getCustomFieldData(importMap: ImportMap): {
   customFields: CustomFields;
@@ -91,6 +102,8 @@ export const parseExcel = (excelData: unknown[][], options?: Partial<ImportMap>)
   let isPublicIndex: number | null = null;
   let skipIndex: number | null = null;
 
+  let linkStartIndex: number | null = null;
+
   // times: numbers
   let timeStartIndex: number | null = null;
   let timeEndIndex: number | null = null;
@@ -115,6 +128,10 @@ export const parseExcel = (excelData: unknown[][], options?: Partial<ImportMap>)
       [importMap.timeStart]: (row: number, col: number) => {
         timeStartIndex = col;
         rundownMetadata['timeStart'] = { row, col };
+      },
+      [importMap.linkStart]: (row: number, col: number) => {
+        linkStartIndex = col;
+        rundownMetadata['linkStart'] = { row, col };
       },
       [importMap.timeEnd]: (row: number, col: number) => {
         timeEndIndex = col;
@@ -167,7 +184,7 @@ export const parseExcel = (excelData: unknown[][], options?: Partial<ImportMap>)
       },
       custom: (row: number, col: number, columnText: string) => {
         customFieldIndexes[col] = columnText;
-        rundownMetadata[`custom-${columnText}`] = { row, col };
+        rundownMetadata[`custom:${columnText}`] = { row, col };
       },
     } as const;
 
@@ -191,6 +208,8 @@ export const parseExcel = (excelData: unknown[][], options?: Partial<ImportMap>)
         event.title = makeString(column, '');
       } else if (j === timeStartIndex) {
         event.timeStart = parseExcelDate(column);
+      } else if (j === linkStartIndex) {
+        event.linkStart = parseBooleanString(column);
       } else if (j === timeEndIndex) {
         event.timeEnd = parseExcelDate(column);
       } else if (j === durationIndex) {
@@ -198,9 +217,9 @@ export const parseExcel = (excelData: unknown[][], options?: Partial<ImportMap>)
       } else if (j === cueIndex) {
         event.cue = makeString(column, '');
       } else if (j === isPublicIndex) {
-        event.isPublic = column == 'x' ? true : coerceBoolean(column);
+        event.isPublic = parseBooleanString(column);
       } else if (j === skipIndex) {
-        event.skip = column == 'x' ? true : coerceBoolean(column);
+        event.skip = parseBooleanString(column);
       } else if (j === notesIndex) {
         event.note = makeString(column, '');
       } else if (j === endActionIndex) {

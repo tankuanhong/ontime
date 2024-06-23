@@ -1,9 +1,8 @@
-name: Ontime build v3
+name: Ontime build
 
 on:
-# Only trigger manually for now for testing
-#   push:
-#     tags: [ "*" ]
+  push:
+    tags: [ "*" ]
   workflow_dispatch:
 
 jobs:
@@ -31,7 +30,14 @@ jobs:
         run: pnpm build
 
       - name: Electron - Build app
+        env: 
+          APPLE_ID: ${{ secrets.APPLEID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLEIDPASS }}
+          APPLE_TEAM_ID: ${{ secrets.TEAMID }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          CSC_LINK: ${{ secrets.CSC_LINK }}
         run: pnpm dist-mac
+        timeout-minutes: 60
 
       - name: Release
         uses: softprops/action-gh-release@v1

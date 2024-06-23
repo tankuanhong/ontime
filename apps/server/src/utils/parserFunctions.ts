@@ -18,7 +18,7 @@ import {
   isOntimeDelay,
   isOntimeEvent,
 } from 'ontime-types';
-import { generateId } from 'ontime-utils';
+import { generateId, getLastEvent } from 'ontime-utils';
 
 import { dbModel } from '../models/dataModel.js';
 import { block as blockDef, delay as delayDef } from '../models/eventsDefinition.js';
@@ -48,11 +48,16 @@ export const parseRundown = (data: Partial<DatabaseModel>): OntimeRundown => {
     let newEvent: OntimeEvent | OntimeDelay | OntimeBlock | null;
 
     if (isOntimeEvent(event)) {
+      if (event.linkStart) {
+        const prevId = getLastEvent(rundown).lastEvent?.id ?? null;
+        event.linkStart = prevId;
+      }
       newEvent = createEvent(event, eventIndex.toString());
       // skip if event is invalid
       if (newEvent == null) {
         continue;
       }
+
       eventIndex += 1;
     } else if (isOntimeDelay(event)) {
       newEvent = { ...delayDef, duration: event.duration, id };
@@ -243,19 +248,24 @@ export const parseCustomFields = (data: Partial<DatabaseModel>): CustomFields =>
   if (typeof data.customFields !== 'object') {
     return { ...dbModel.customFields };
   }
-
   console.log('Found Custom Fields, importing...');
 
+  return sanitiseCustomFields(data.customFields);
+};
+
+export const sanitiseCustomFields = (data: object): CustomFields => {
   const newCustomFields: CustomFields = {};
 
-  for (const fieldLabel in data.customFields) {
-    const field = data.customFields[fieldLabel];
-    if (!field.label || !field.type || !field.colour) {
+  for (const fieldLabel in data) {
+    const field = data[fieldLabel];
+    if (!('label' in field) || field.label === '' || !('colour' in field) || typeof field.colour != 'string') {
       console.log('ERROR: missing required field, skipping');
       continue;
     }
-    newCustomFields[field.label] = {
-      type: field.type,
+
+    const key = field.label.toLowerCase();
+    newCustomFields[key] = {
+      type: 'string',
       colour: field.colour,
       label: field.label,
     };

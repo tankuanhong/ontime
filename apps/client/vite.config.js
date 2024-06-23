@@ -52,12 +52,16 @@ export default defineConfig({
       '@': fileURLToPath(new URL('./src', import.meta.url)),
     },
   },
+  esbuild: {
+    legalComments: 'none',
+  },
   css: {
     preprocessorOptions: {
       scss: {
         additionalData: `
         @use './src/theme/ontimeColours' as *;
         @use './src/theme/ontimeStyles' as *;
+        @use './src/theme/mixins' as *;
         `,
       },
     },

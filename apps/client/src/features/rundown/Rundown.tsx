@@ -1,18 +1,20 @@
 import { Fragment, lazy, useCallback, useEffect, useRef, useState } from 'react';
 import { closestCenter, DndContext, DragEndEvent, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';
 import { arrayMove, SortableContext, verticalListSortingStrategy } from '@dnd-kit/sortable';
+import { useHotkeys } from '@mantine/hooks';
 import { isOntimeEvent, MaybeNumber, Playback, RundownCached, SupportedEvent } from 'ontime-types';
-import { getFirstNormal, getNextNormal, getPreviousNormal } from 'ontime-utils';
+import { getFirstNormal, getLastNormal, getNextNormal, getPreviousNormal } from 'ontime-utils';
 
 import { useEventAction } from '../../common/hooks/useEventAction';
 import useFollowComponent from '../../common/hooks/useFollowComponent';
 import { useRundownEditor } from '../../common/hooks/useSocket';
 import { AppMode, useAppMode } from '../../common/stores/appModeStore';
-import { useEditorSettings } from '../../common/stores/editorSettings';
+import { useEntryCopy } from '../../common/stores/entryCopyStore';
 import { cloneEvent } from '../../common/utils/eventsManager';
 
 import QuickAddBlock from './quick-add-block/QuickAddBlock';
 import RundownEmpty from './RundownEmpty';
+import { useEventSelection } from './useEventSelection';
 
 import style from './Rundown.module.scss';
 
@@ -27,13 +29,14 @@ export default function Rundown({ data }: RundownProps) {
   const [statefulEntries, setStatefulEntries] = useState(order);
 
   const featureData = useRundownEditor();
-  const { addEvent, reorderEvent } = useEventAction();
-  const eventSettings = useEditorSettings((state) => state.eventSettings);
-  const defaultPublic = eventSettings.defaultPublic;
-  const linkPrevious = eventSettings.linkPrevious;
+  const { addEvent, reorderEvent, deleteEvent } = useEventAction();
+
+  const { entryCopyId, setEntryCopyId } = useEntryCopy();
 
   // cursor
-  const { cursor, mode: appMode, setCursor } = useAppMode();
+  const { mode: appMode } = useAppMode();
+  const { clearSelectedEvents, setSelectedEvents, cursor } = useEventSelection();
+
   const cursorRef = useRef<HTMLDivElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   useFollowComponent({ followRef: cursorRef, scrollRef, doFollow: appMode === AppMode.Run });
@@ -41,120 +44,129 @@ export default function Rundown({ data }: RundownProps) {
   // DND KIT
   const sensors = useSensors(useSensor(PointerSensor));
 
-  const insertAtCursor = useCallback(
-    (type: SupportedEvent | 'clone', cursor: string | null) => {
-      if (cursor === null) {
+  const deleteAtCursor = useCallback(
+    (cursor: string | null) => {
+      if (!cursor) return;
+      const { entry, index } = getPreviousNormal(rundown, order, cursor);
+      deleteEvent([cursor]);
+      if (entry && index !== null) {
+        setSelectedEvents({ id: entry.id, selectMode: 'click', index });
+      }
+    },
+    [rundown, order, deleteEvent, setSelectedEvents],
+  );
+
+  const insertCopyAtId = useCallback(
+    (atId: string | null, copyId: string | null, above = false) => {
+      const adjustedCursor = above ? getPreviousNormal(rundown, order, atId ?? '').entry?.id ?? null : atId;
+      if (copyId === null) {
         // we cant clone without selection
-        if (type === 'clone') {
-          return;
-        }
+        return;
+      }
+      const cloneEntry = rundown[copyId];
+      if (cloneEntry?.type === SupportedEvent.Event) {
+        //if we don't have a cursor add the new event on top
+        const newEvent = cloneEvent(cloneEntry, adjustedCursor ?? undefined);
+        addEvent(newEvent);
+      }
+    },
+    [addEvent, order, rundown],
+  );
+
+  const insertAtId = useCallback(
+    (type: SupportedEvent, id: string | null, above = false) => {
+      const adjustedCursor = above ? getPreviousNormal(rundown, order, id ?? '').entry?.id ?? null : id;
+      if (adjustedCursor === null) {
         // the only thing to do is adding an event at top
         addEvent({ type });
         return;
       }
 
-      if (type === 'clone') {
-        const cursorEvent = rundown[cursor];
-        if (cursorEvent?.type === SupportedEvent.Event) {
-          const newEvent = cloneEvent(cursorEvent, cursorEvent.id);
-          addEvent(newEvent);
-        }
-      } else if (type === SupportedEvent.Event) {
+      if (type === SupportedEvent.Event) {
         const newEvent = {
           type: SupportedEvent.Event,
         };
         const options = {
-          after: cursor,
-          defaultPublic,
-          lastEventId: cursor,
-          linkPrevious,
+          after: adjustedCursor,
+          lastEventId: adjustedCursor,
         };
         addEvent(newEvent, options);
       } else {
-        addEvent({ type }, { after: cursor });
+        addEvent({ type }, { after: adjustedCursor });
       }
     },
-    [addEvent, rundown, defaultPublic, linkPrevious],
+    [rundown, order, addEvent],
   );
 
-  // Handle keyboard shortcuts
-  const handleKeyDown = useCallback(
-    (event: KeyboardEvent) => {
-      // handle held key
-      if (event.repeat) return;
+  const selectEntry = useCallback(
+    (cursor: string | null, direction: 'up' | 'down') => {
+      if (order.length < 1) {
+        return;
+      }
+      let newCursor: string | null;
+      let newIndex: number | null;
+      if (cursor === null) {
+        // there is no cursor, we select the first or last depending on direction if it exists
+        newCursor =
+          (direction === 'up' ? getLastNormal(rundown, order)?.id : getFirstNormal(rundown, order)?.id) ?? null;
+        newIndex = direction === 'up' ? order.length : 0;
+      } else {
+        // otherwise we select the next or previous
+        const selected =
+          direction === 'up' ? getPreviousNormal(rundown, order, cursor) : getNextNormal(rundown, order, cursor);
+        newCursor = selected.entry?.id ?? null;
+        newIndex = selected.index;
+      }
 
-      const modKeysAlt = event.altKey && !event.ctrlKey && !event.shiftKey;
-      const modKeysCtrlAlt = event.altKey && event.ctrlKey && !event.shiftKey;
-
-      if (modKeysAlt) {
-        switch (event.code) {
-          case 'ArrowDown': {
-            if (order.length < 1) {
-              return;
-            }
-            const nextEvent =
-              cursor === null ? getFirstNormal(rundown, order) : getNextNormal(rundown, order, cursor)?.nextEvent;
-            if (nextEvent) {
-              setCursor(nextEvent.id);
-            }
-            break;
-          }
-          case 'ArrowUp': {
-            if (order.length < 1) {
-              return;
-            }
-            // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- we check for this before
-            const previousEvent =
-              cursor === null
-                ? getFirstNormal(rundown, order)
-                : getPreviousNormal(rundown, order, cursor).previousEvent;
-            if (previousEvent) {
-              setCursor(previousEvent.id);
-            }
-            break;
-          }
-          case 'KeyE': {
-            event.preventDefault();
-            insertAtCursor(SupportedEvent.Event, cursor);
-            break;
-          }
-          case 'KeyD': {
-            event.preventDefault();
-            insertAtCursor(SupportedEvent.Delay, cursor);
-            break;
-          }
-          case 'KeyB': {
-            event.preventDefault();
-            insertAtCursor(SupportedEvent.Block, cursor);
-            break;
-          }
-          case 'KeyC': {
-            event.preventDefault();
-            insertAtCursor('clone', cursor);
-            break;
-          }
-        }
-      } else if (modKeysCtrlAlt) {
-        if (order.length < 2 || cursor == null) {
-          return;
-        }
-        // Alt + Ctrl + Arrow Down
-        if (event.code == 'ArrowDown') {
-          const { nextEvent, nextIndex } = getNextNormal(rundown, order, cursor);
-          if (nextEvent && nextIndex !== null) {
-            reorderEvent(cursor, nextIndex - 1, nextIndex);
-          }
-          // Alt + Ctrl + Arrow Up
-        } else if (event.code == 'ArrowUp') {
-          const { previousEvent, previousIndex } = getPreviousNormal(rundown, order, cursor);
-          if (previousEvent && previousIndex !== null) {
-            reorderEvent(cursor, previousIndex + 1, previousIndex);
-          }
-        }
+      if (newCursor && newIndex !== null) {
+        setSelectedEvents({ id: newCursor, selectMode: 'click', index: newIndex });
       }
     },
-    [order, cursor, rundown, setCursor, insertAtCursor, reorderEvent],
+    [order, rundown, setSelectedEvents],
   );
+
+  const moveEntry = useCallback(
+    (cursor: string | null, direction: 'up' | 'down') => {
+      if (order.length < 2 || cursor == null) {
+        return;
+      }
+      const { index } =
+        direction === 'up' ? getPreviousNormal(rundown, order, cursor) : getNextNormal(rundown, order, cursor);
+
+      if (index !== null) {
+        const offsetIndex = direction === 'up' ? index + 1 : index - 1;
+        reorderEvent(cursor, offsetIndex, index);
+      }
+    },
+    [order, reorderEvent, rundown],
+  );
+
+  // shortcuts
+  useHotkeys([
+    ['alt + ArrowDown', () => selectEntry(cursor, 'down'), { preventDefault: true }],
+    ['alt + ArrowUp', () => selectEntry(cursor, 'up'), { preventDefault: true }],
+    ['alt + mod + ArrowDown', () => moveEntry(cursor, 'down'), { preventDefault: true }],
+    ['alt + mod + ArrowUp', () => moveEntry(cursor, 'up'), { preventDefault: true }],
+
+    ['Escape', () => clearSelectedEvents(), { preventDefault: true }],
+
+    ['mod + Backspace', () => deleteAtCursor(cursor), { preventDefault: true }],
+
+    ['alt + E', () => insertAtId(SupportedEvent.Event, cursor), { preventDefault: true }],
+    ['alt + shift + E', () => insertAtId(SupportedEvent.Event, cursor, true), { preventDefault: true }],
+
+    ['alt + B', () => insertAtId(SupportedEvent.Block, cursor), { preventDefault: true }],
+    ['alt + shift + B', () => insertAtId(SupportedEvent.Block, cursor, true), { preventDefault: true }],
+
+    ['alt + D', () => insertAtId(SupportedEvent.Delay, cursor), { preventDefault: true }],
+    ['alt + shift + D', () => insertAtId(SupportedEvent.Delay, cursor, true), { preventDefault: true }],
+
+    ['mod + C', () => setEntryCopyId(cursor), { preventDefault: true }],
+    ['mod + V', () => insertCopyAtId(cursor, entryCopyId), { preventDefault: true }],
+    ['mod + shift + V', () => insertCopyAtId(cursor, entryCopyId, true), { preventDefault: true }],
+
+    ['alt + backspace', () => deleteAtCursor(cursor), { preventDefault: true }],
+  ]);
 
   // we copy the state from the store here
   // to workaround async updates on the drag mutations
@@ -162,22 +174,14 @@ export default function Rundown({ data }: RundownProps) {
     setStatefulEntries(order);
   }, [order]);
 
-  // listen to keys
-  useEffect(() => {
-    document.addEventListener('keydown', handleKeyDown);
-
-    return () => {
-      document.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [handleKeyDown]);
-
   useEffect(() => {
     // in run mode, we follow selection
     if (appMode !== AppMode.Run || !featureData?.selectedEventId) {
       return;
     }
-    setCursor(featureData.selectedEventId);
-  }, [appMode, featureData.selectedEventId, setCursor]);
+    const index = order.findIndex((id) => id === featureData.selectedEventId);
+    setSelectedEvents({ id: featureData.selectedEventId, selectMode: 'click', index });
+  }, [appMode, featureData.selectedEventId, order, setSelectedEvents]);
 
   const handleOnDragEnd = (event: DragEndEvent) => {
     const { active, over } = event;
@@ -196,7 +200,7 @@ export default function Rundown({ data }: RundownProps) {
   };
 
   if (statefulEntries.length < 1) {
-    return <RundownEmpty handleAddNew={() => insertAtCursor(SupportedEvent.Event, null)} />;
+    return <RundownEmpty handleAddNew={() => insertAtId(SupportedEvent.Event, cursor)} />;
   }
 
   let previousStart: MaybeNumber = null;

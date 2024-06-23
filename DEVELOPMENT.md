@@ -81,6 +81,9 @@ From the project root, run the following commands
 
 The build distribution assets will be at `.apps/electron/dist`
 
+Note: The MacOS build will only work in CI, locally it will fail due to notarisation issues.
+Use the `turbo dist-mac:local` command to build a MacOS distribution locally.
+
 ## DOCKER
 
 Ontime provides a docker-compose file to aid with building and running docker images.
@@ -88,8 +91,6 @@ While it should allow for a generic setup, it might need to be modified to fit y
 
 From the project root, run the following commands
 
-- __Install the project dependencies__ by running `pnpm i`
-- __Build packages__ by running `pnpm build:localdocker`
 - __Build docker image from__ by running `docker build -t getontime/ontime`
 - __Run docker image from compose__ by running `docker-compose up -d`
 

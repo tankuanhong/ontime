@@ -14,27 +14,26 @@ import {
 } from './db.controller.js';
 import { uploadProjectFile } from './db.middleware.js';
 import {
-  projectSanitiser,
-  sanitizeProjectFilename,
-  validateLoadProjectFile,
-  validatePatchProjectFile,
-  validateProjectDuplicate,
-  validateProjectRename,
+  validateNewProject,
+  validatePatchProject,
+  validateFilenameBody,
+  validateFilenameParam,
+  validateNewFilenameBody,
 } from './db.validation.js';
 
 export const router = express.Router();
 
-router.get('/download', projectDownload);
+router.post('/download', validateFilenameBody, projectDownload);
 router.post('/upload', uploadProjectFile, postProjectFile);
 
-router.patch('/', validatePatchProjectFile, patchPartialProjectFile);
-router.post('/new', projectSanitiser, createProjectFile);
+router.patch('/', validatePatchProject, patchPartialProjectFile);
+router.post('/new', validateFilenameBody, validateNewProject, createProjectFile);
 
 router.get('/all', listProjects);
 
-router.post('/load', validateLoadProjectFile, sanitizeProjectFilename, loadProject);
-router.post('/:filename/duplicate', validateProjectDuplicate, sanitizeProjectFilename, duplicateProjectFile);
-router.put('/:filename/rename', validateProjectRename, sanitizeProjectFilename, renameProjectFile);
-router.delete('/:filename', sanitizeProjectFilename, deleteProjectFile);
+router.post('/load', validateFilenameBody, loadProject);
+router.post('/:filename/duplicate', validateFilenameParam, validateNewFilenameBody, duplicateProjectFile);
+router.put('/:filename/rename', validateFilenameParam, validateFilenameBody, renameProjectFile);
+router.delete('/:filename', validateFilenameParam, deleteProjectFile);
 
 router.get('/info', getInfo);

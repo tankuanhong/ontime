@@ -9,7 +9,7 @@ import {
   OntimeRundown,
   OntimeRundownEntry,
 } from 'ontime-types';
-import { generateId, deleteAtIndex, insertAtIndex, reorderArray, swapEventData } from 'ontime-utils';
+import { generateId, insertAtIndex, reorderArray, swapEventData, checkIsNextDay } from 'ontime-utils';
 
 import { DataProvider } from '../../classes/data-provider/DataProvider.js';
 import { createPatch } from '../../utils/parser.js';
@@ -39,7 +39,7 @@ let lastEnd: MaybeNumber = null;
 let links: Record<EventID, EventID> = {};
 
 /**
- * Object that contains renamings to custom fields
+ * Object that contains reference of renamed custom fields
  * Used to rename the custom fields in the events
  * @example
  * {
@@ -47,7 +47,7 @@ let links: Record<EventID, EventID> = {};
  *  lighting: lx
  * }
  */
-const customFieldChangelog = {};
+export const customFieldChangelog = new Map<string, string>();
 
 /**
  * Keep track of which custom fields are used.
@@ -80,10 +80,14 @@ export function generate(
   links = {};
   firstStart = null;
   lastEnd = null;
+  totalDuration = 0;
+  totalDelay = 0;
 
   let accumulatedDelay = 0;
   let daySpan = 0;
+  let previousStart: MaybeNumber = null;
   let previousEnd: MaybeNumber = null;
+  let previousDuration: MaybeNumber = null;
 
   for (let i = 0; i < initialRundown.length; i++) {
     const currentEvent = initialRundown[i];
@@ -99,17 +103,21 @@ export function generate(
       // update the persisted event
       initialRundown[i] = updatedEvent;
 
-      // update rundown duration
-      if (firstStart === null) {
-        firstStart = updatedEvent.timeStart;
-      }
-      lastEnd = updatedEvent.timeEnd;
+      // we need to generate the skip event, but dont want to use its times
+      if (!updatedEvent.skip) {
+        // update rundown duration
+        if (firstStart === null) {
+          firstStart = updatedEvent.timeStart;
+        }
+        lastEnd = updatedEvent.timeEnd;
 
-      // check if we go over midnight, account for eventual gaps
-      const gapOverMidnight = previousEnd !== null && previousEnd > updatedEvent.timeStart;
-      const durationOverMidnight = updatedEvent.timeStart > updatedEvent.timeEnd;
-      if (gapOverMidnight || durationOverMidnight) {
-        daySpan++;
+        // check if we go over midnight, account for eventual gaps
+        const gapOverMidnight =
+          previousStart !== null && checkIsNextDay(previousStart, updatedEvent.timeStart, previousDuration);
+        const durationOverMidnight = updatedEvent.timeStart > updatedEvent.timeEnd;
+        if (gapOverMidnight || durationOverMidnight) {
+          daySpan++;
+        }
       }
     }
 
@@ -117,7 +125,7 @@ export function generate(
     // !!! this must happen after handling the links
     if (isOntimeDelay(updatedEvent)) {
       accumulatedDelay += updatedEvent.duration;
-    } else if (isOntimeEvent(updatedEvent)) {
+    } else if (isOntimeEvent(updatedEvent) && !updatedEvent.skip) {
       const eventStart = updatedEvent.timeStart;
 
       // we only affect positive delays (time forwards)
@@ -126,7 +134,9 @@ export function generate(
         accumulatedDelay = Math.max(accumulatedDelay - gap, 0);
       }
       updatedEvent.delay = accumulatedDelay;
+      previousStart = updatedEvent.timeStart;
       previousEnd = updatedEvent.timeEnd;
+      previousDuration = updatedEvent.duration;
     }
 
     order.push(updatedEvent.id);
@@ -134,6 +144,7 @@ export function generate(
   }
 
   isStale = false;
+  customFieldChangelog.clear();
   totalDelay = accumulatedDelay;
   if (lastEnd !== null && firstStart !== null) {
     totalDuration = getTotalDuration(firstStart, lastEnd, daySpan);
@@ -176,9 +187,7 @@ type RundownCache = {
  */
 export function get(): Readonly<RundownCache> {
   if (isStale) {
-    console.time('rundownCache__init');
     generate();
-    console.timeEnd('rundownCache__init');
   }
   return {
     rundown,
@@ -194,9 +203,7 @@ export function get(): Readonly<RundownCache> {
  */
 export function getMetadata() {
   if (isStale) {
-    console.time('rundownCache__init');
     generate();
-    console.timeEnd('rundownCache__init');
   }
 
   return {
@@ -237,9 +244,7 @@ export function mutateCache<T extends object>(mutation: MutatingFn<T>) {
 
     // schedule a non priority cache update
     setImmediate(() => {
-      console.time('rundownCache__init');
       get();
-      console.timeEnd('rundownCache__init');
     });
 
     // defer writing to the database
@@ -262,13 +267,12 @@ export function add({ persistedRundown, atIndex, event }: AddArgs): Required<Mut
   return { newRundown, newEvent, didMutate: true };
 }
 
-type RemoveArgs = MutationParams<{ eventId: string }>;
+type RemoveArgs = MutationParams<{ eventIds: string[] }>;
 
-export function remove({ persistedRundown, eventId }: RemoveArgs): MutatingReturn {
-  const atIndex = persistedRundown.findIndex((event) => event.id === eventId);
-  const newRundown = deleteAtIndex(atIndex, persistedRundown);
+export function remove({ persistedRundown, eventIds }: RemoveArgs): MutatingReturn {
+  const newRundown = persistedRundown.filter((event) => !eventIds.includes(event.id));
 
-  return { newRundown, didMutate: atIndex !== -1 };
+  return { newRundown, didMutate: persistedRundown.length !== newRundown.length };
 }
 
 export function removeAll(): MutatingReturn {
@@ -410,14 +414,13 @@ function invalidateIfUsed(label: CustomFieldLabel) {
   // ... and schedule a cache update
   // schedule a non priority cache update
   setImmediate(() => {
-    console.time('rundownCache__init');
     generate();
-    console.timeEnd('rundownCache__init');
+    DataProvider.setRundown(persistedRundown);
   });
 }
 
 /**
- * Scheduløes a non priority custom field persist
+ * Schedules a non priority custom field persist
  * @param persistedCustomFields
  */
 function scheduleCustomFieldPersist(persistedCustomFields: CustomFields) {
@@ -461,7 +464,7 @@ export const editCustomField = async (key: string, newField: Partial<CustomField
   }
 
   const existingField = persistedCustomFields[key];
-  if (existingField.type !== newField.type) {
+  if (newField.type !== undefined && existingField.type !== newField.type) {
     throw new Error('Change of field type is not allowed');
   }
 
@@ -470,7 +473,7 @@ export const editCustomField = async (key: string, newField: Partial<CustomField
 
   if (key !== newKey) {
     delete persistedCustomFields[key];
-    customFieldChangelog[key] = newKey;
+    customFieldChangelog.set(key, newKey);
   }
 
   scheduleCustomFieldPersist(persistedCustomFields);

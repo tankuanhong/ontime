@@ -1,4 +1,4 @@
-import { MaybeNumber, MaybeString, OntimeEvent, TimerType } from 'ontime-types';
+import { MaybeNumber, MaybeString, OntimeEvent, Playback, TimerPhase, TimerType } from 'ontime-types';
 import { dayInMs } from 'ontime-utils';
 import { RuntimeState } from '../stores/runtimeState.js';
 import { timerConfig } from '../config/config.js';
@@ -118,18 +118,21 @@ type RollTimers = {
  * Finds loading information given a current rundown and time
  * @param {OntimeEvent[]} rundown - List of playable events
  * @param {number} timeNow - time now in ms
- * @returns {{}}
  */
-export const getRollTimers = (rundown: OntimeEvent[], timeNow: number): RollTimers => {
-  let nowIndex: number | null = null; // index of event now
-  let nowId: string | null = null; // id of event now
-  let publicIndex: number | null = null; // index of public event now
-  let nextIndex: number | null = null; // index of next event
-  let publicNextIndex: number | null = null; // index of next public event
-  let timeToNext: number | null = null; // counter: time for next event
-  let publicTimeToNext: number | null = null; // counter: time for next public event
+export const getRollTimers = (rundown: OntimeEvent[], timeNow: number, currentIndex?: number | null): RollTimers => {
+  let nowIndex: MaybeNumber = null; // index of event now
+  let nowId: MaybeString = null; // id of event now
+  let publicIndex: MaybeNumber = null; // index of public event now
+  let nextIndex: MaybeNumber = null; // index of next event
+  let publicNextIndex: MaybeNumber = null; // index of next public event
+  let timeToNext: MaybeNumber = null; // counter: time for next event
+  let publicTimeToNext: MaybeNumber = null; // counter: time for next public event
 
-  const lastEvent = rundown[rundown.length - 1];
+  const hasLoaded = currentIndex !== null;
+  const canFilter = hasLoaded && currentIndex === rundown.length - 1;
+  const filteredRundown = canFilter ? rundown.slice(currentIndex) : rundown;
+
+  const lastEvent = filteredRundown.at(-1);
   const lastNormalEnd = normaliseEndTime(lastEvent.timeStart, lastEvent.timeEnd);
 
   let nextEvent: OntimeEvent | null = null;
@@ -141,7 +144,7 @@ export const getRollTimers = (rundown: OntimeEvent[], timeNow: number): RollTime
     // we are past last end
     // preload first and find next
 
-    const firstEvent = rundown[0];
+    const firstEvent = filteredRundown.at(0);
     nextIndex = 0;
     nextEvent = firstEvent;
     timeToNext = firstEvent.timeStart + dayInMs - timeNow;
@@ -153,11 +156,11 @@ export const getRollTimers = (rundown: OntimeEvent[], timeNow: number): RollTime
       // look for next public
       // dev note: we feel that this is more efficient than filtering
       // since the next event will likely be close to the one playing
-      for (const event of rundown) {
+      for (const event of filteredRundown) {
         if (event.isPublic) {
           nextPublicEvent = event;
           // we need the index before this was sorted
-          publicNextIndex = rundown.findIndex((rundownEvent) => rundownEvent.id === event.id);
+          publicNextIndex = filteredRundown.findIndex((rundownEvent) => rundownEvent.id === event.id);
           break;
         }
       }
@@ -168,7 +171,7 @@ export const getRollTimers = (rundown: OntimeEvent[], timeNow: number): RollTime
     // keep track of the end times when looking for public
     let publicTime = -1;
 
-    for (const event of rundown) {
+    for (const event of filteredRundown) {
       // When does the event end (handle midnight)
       const normalEnd = normaliseEndTime(event.timeStart, event.timeEnd);
 
@@ -183,12 +186,12 @@ export const getRollTimers = (rundown: OntimeEvent[], timeNow: number): RollTime
           // public event might not be the one running
           publicTime = normalEnd;
           currentPublicEvent = event;
-          publicIndex = rundown.findIndex((rundownEvent) => rundownEvent.id === event.id);
+          publicIndex = filteredRundown.findIndex((rundownEvent) => rundownEvent.id === event.id);
         }
       } else if (hasNotEnded && hasStarted && !nowFound) {
         // event is running
         currentEvent = event;
-        nowIndex = rundown.findIndex((rundownEvent) => rundownEvent.id === event.id);
+        nowIndex = filteredRundown.findIndex((rundownEvent) => rundownEvent.id === event.id);
         nowId = event.id;
         nowFound = true;
 
@@ -196,7 +199,7 @@ export const getRollTimers = (rundown: OntimeEvent[], timeNow: number): RollTime
         if (event.isPublic) {
           publicTime = normalEnd;
           currentPublicEvent = event;
-          publicIndex = rundown.findIndex((rundownEvent) => rundownEvent.id === event.id);
+          publicIndex = filteredRundown.findIndex((rundownEvent) => rundownEvent.id === event.id);
         }
       } else if (normalEnd > timeNow) {
         // event will run
@@ -214,7 +217,7 @@ export const getRollTimers = (rundown: OntimeEvent[], timeNow: number): RollTime
         if (nextIndex === null || timeToEventStart < timeToNext) {
           timeToNext = timeToEventStart;
           nextEvent = event;
-          nextIndex = rundown.findIndex((rundownEvent) => rundownEvent.id === event.id);
+          nextIndex = filteredRundown.findIndex((rundownEvent) => rundownEvent.id === event.id);
         }
 
         if (event.isPublic) {
@@ -222,7 +225,7 @@ export const getRollTimers = (rundown: OntimeEvent[], timeNow: number): RollTime
           if (publicNextIndex === null || timeToEventStart < publicTimeToNext) {
             publicTimeToNext = timeToEventStart;
             nextPublicEvent = event;
-            publicNextIndex = rundown.findIndex((rundownEvent) => rundownEvent.id === event.id);
+            publicNextIndex = filteredRundown.findIndex((rundownEvent) => rundownEvent.id === event.id);
           }
         }
       }
@@ -293,12 +296,11 @@ export const updateRoll = (state: RuntimeState) => {
 
 /**
  * Calculates difference between the runtime and the schedule of an event
- * Positive offset is a delay
- * Negative offset is time ahead
- * @param state
- * @returns
+ * Positive offset is time ahead
+ * Negative offset is time delayed
  */
 export function getRuntimeOffset(state: RuntimeState): MaybeNumber {
+  // nothing to calculate if there are no loaded events or if we havent started
   if (state.eventNow === null || state.runtime.actualStart === null) {
     return null;
   }
@@ -307,9 +309,10 @@ export function getRuntimeOffset(state: RuntimeState): MaybeNumber {
   const { timeStart, timerType } = state.eventNow;
   const { addedTime, current, startedAt } = state.timer;
 
-  // if we havent started, the offset is the difference to the schedule
+  // if we havent started, but the timer is armed
+  // the offset is the difference to the schedule
   if (startedAt === null) {
-    return clock - timeStart;
+    return timeStart - clock;
   }
 
   const overtime = Math.abs(Math.min(current, 0));
@@ -318,10 +321,14 @@ export function getRuntimeOffset(state: RuntimeState): MaybeNumber {
     return overtime;
   }
 
-  const startOffset = startedAt - timeStart;
+  const startOffset = timeStart - startedAt;
   const pausedTime = state._timer.pausedAt === null ? 0 : clock - state._timer.pausedAt;
 
-  return startOffset + addedTime + pausedTime + overtime;
+  // startOffset - difference between scheduled start and actual start
+  // addedTime - time added by user (negative offset)
+  // pausedTime - time the playback was paused (negative offset)
+  // overtime - how long the timer has been over-running (negative offset)
+  return startOffset - addedTime - pausedTime - overtime;
 }
 
 /**
@@ -352,5 +359,50 @@ export function getExpectedEnd(state: RuntimeState): MaybeNumber {
   if (state.runtime.actualStart === null) {
     return null;
   }
-  return state.runtime.plannedEnd + state.runtime.offset + state._timer.totalDelay;
+  return state.runtime.plannedEnd - state.runtime.offset + state._timer.totalDelay;
+}
+
+/**
+ * Utility checks whether the playback is considered to be active
+ * @param state
+ * @returns
+ */
+function isPlaybackActive(state: RuntimeState): boolean {
+  return (
+    state.timer.playback === Playback.Play ||
+    state.timer.playback === Playback.Pause ||
+    state.timer.playback === Playback.Roll
+  );
+}
+
+/**
+ * Checks running timer to see which phase it currently is in
+ * @param state
+ */
+export function getTimerPhase(state: RuntimeState): TimerPhase {
+  if (!isPlaybackActive(state)) {
+    return TimerPhase.None;
+  }
+
+  const current = state.timer.current;
+
+  if (current === null || state.eventNow === null) {
+    return TimerPhase.Pending;
+  }
+
+  if (current < 0) {
+    return TimerPhase.Overtime;
+  }
+
+  const danger = state.eventNow.timeDanger;
+  if (current <= danger) {
+    return TimerPhase.Danger;
+  }
+
+  const warning = state.eventNow.timeWarning;
+  if (current <= warning) {
+    return TimerPhase.Warning;
+  }
+
+  return TimerPhase.Default;
 }

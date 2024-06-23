@@ -6,17 +6,21 @@ import {
   ProjectData,
   ProjectFileListResponse,
 } from 'ontime-types';
+import { getErrorMessage } from 'ontime-utils';
 
+import { join } from 'path';
+import { existsSync } from 'fs';
 import type { Request, Response } from 'express';
 
 import { failEmptyObjects } from '../../utils/routerUtils.js';
-import { resolveDbPath, resolveProjectsDirectory } from '../../setup/index.js';
+import { resolveDbDirectory, resolveProjectsDirectory } from '../../setup/index.js';
 
 import * as projectService from '../../services/project-service/ProjectService.js';
-import { ensureJsonExtension } from '../../utils/fileManagement.js';
 import { generateUniqueFileName } from '../../utils/generateUniqueFilename.js';
 import { appStateService } from '../../services/app-state-service/AppStateService.js';
-import { getErrorMessage } from 'ontime-utils';
+import { oscIntegration } from '../../services/integration-service/OscIntegration.js';
+import { httpIntegration } from '../../services/integration-service/HttpIntegration.js';
+import { DataProvider } from '../../classes/data-provider/DataProvider.js';
 
 export async function patchPartialProjectFile(req: Request, res: Response<DatabaseModel | ErrorResponse>) {
   // all fields are optional in validation
@@ -30,6 +34,7 @@ export async function patchPartialProjectFile(req: Request, res: Response<Databa
     const patchDb: DatabaseModel = { rundown, project, settings, viewSettings, urlPresets, customFields, osc, http };
 
     const newData = await projectService.applyDataModel(patchDb);
+
     res.status(200).send(newData);
   } catch (error) {
     const message = getErrorMessage(error);
@@ -48,8 +53,7 @@ export async function patchPartialProjectFile(req: Request, res: Response<Databa
  */
 export async function createProjectFile(req: Request, res: Response<{ filename: string } | ErrorResponse>) {
   try {
-    const originalFilename = ensureJsonExtension(req.body.title || 'Untitled');
-    const filename = generateUniqueFileName(resolveProjectsDirectory, originalFilename);
+    const filename = generateUniqueFileName(resolveProjectsDirectory, req.body.filename);
     const errors = projectService.validateProjectFiles({ newFilename: filename });
 
     if (errors.length) {
@@ -65,7 +69,7 @@ export async function createProjectFile(req: Request, res: Response<{ filename: 
       backstageInfo: req.body?.backstageInfo ?? '',
     };
 
-    projectService.createProjectFile(filename, newProjectData);
+    await projectService.createProjectFile(filename, newProjectData);
 
     res.status(200).send({
       filename,
@@ -76,9 +80,19 @@ export async function createProjectFile(req: Request, res: Response<{ filename: 
   }
 }
 
-export async function projectDownload(_req: Request, res: Response) {
-  const fileTitle = projectService.getProjectTitle();
-  res.download(resolveDbPath, `${fileTitle}.json`, (error) => {
+/**
+ * Allows downloading of project files
+ */
+export async function projectDownload(req: Request, res: Response) {
+  const { filename } = req.body;
+  const pathToFile = join(resolveDbDirectory, filename);
+
+  // Check if the file exists before attempting to download
+  if (!existsSync(pathToFile)) {
+    return res.status(404).send({ message: `Project ${filename} not found.` });
+  }
+
+  res.download(pathToFile, filename, (error) => {
     if (error) {
       const message = getErrorMessage(error);
       res.status(500).send({ message });
@@ -101,6 +115,12 @@ export async function postProjectFile(req: Request, res: Response<MessageRespons
 
     await projectService.handleUploadedFile(path, filename);
     await projectService.applyProjectFile(filename, options);
+
+    const oscSettings = await DataProvider.getOsc();
+    const httpSettings = await DataProvider.getHttp();
+
+    oscIntegration.init(oscSettings);
+    httpIntegration.init(httpSettings);
 
     res.status(201).send({
       message: `Loaded project ${filename}`,
@@ -135,6 +155,12 @@ export async function loadProject(req: Request, res: Response<MessageResponse | 
     }
 
     await projectService.applyProjectFile(name);
+
+    const oscSettings = await DataProvider.getOsc();
+    const httpSettings = await DataProvider.getHttp();
+
+    oscIntegration.init(oscSettings);
+    httpIntegration.init(httpSettings);
 
     res.status(201).send({
       message: `Loaded project ${name}`,
@@ -189,7 +215,7 @@ export async function duplicateProjectFile(req: Request, res: Response<MessageRe
  */
 export async function renameProjectFile(req: Request, res: Response<MessageResponse | ErrorResponse>) {
   try {
-    const { newFilename } = req.body;
+    const { filename: newFilename } = req.body;
     const { filename } = req.params;
 
     const errors = projectService.validateProjectFiles({ filename, newFilename });

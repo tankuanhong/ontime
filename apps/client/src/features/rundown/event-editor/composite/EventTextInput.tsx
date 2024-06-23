@@ -1,4 +1,4 @@
-import { useCallback } from 'react';
+import { useCallback, useRef } from 'react';
 import { Input, InputProps } from '@chakra-ui/react';
 
 import useReactiveTextInput from '../../../../common/components/input/text-input/useReactiveTextInput';
@@ -6,19 +6,19 @@ import { EditorUpdateFields } from '../EventEditor';
 
 import style from '../EventEditor.module.scss';
 
-interface CountedTextInputProps extends InputProps {
+interface EventTextInputProps extends InputProps {
   field: EditorUpdateFields;
   label: string;
   initialValue: string;
   submitHandler: (field: EditorUpdateFields, value: string) => void;
 }
 
-export default function EventTextInput(props: CountedTextInputProps) {
+export default function EventTextInput(props: EventTextInputProps) {
   const { field, label, initialValue, submitHandler, maxLength } = props;
-
+  const ref = useRef<HTMLInputElement | null>(null);
   const submitCallback = useCallback((newValue: string) => submitHandler(field, newValue), [field, submitHandler]);
 
-  const { value, onChange, onBlur, onKeyDown } = useReactiveTextInput(initialValue, submitCallback, {
+  const { value, onChange, onBlur, onKeyDown } = useReactiveTextInput(initialValue, submitCallback, ref, {
     submitOnEnter: true,
   });
 
@@ -29,11 +29,12 @@ export default function EventTextInput(props: CountedTextInputProps) {
       </label>
       <Input
         id={field}
+        ref={ref}
         size='sm'
         variant='ontime-filled'
         data-testid='input-textfield'
         value={value}
-        maxLength={maxLength || 50}
+        maxLength={maxLength || 100}
         onChange={onChange}
         onBlur={onBlur}
         onKeyDown={onKeyDown}

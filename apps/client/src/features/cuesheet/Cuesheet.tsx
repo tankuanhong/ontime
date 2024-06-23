@@ -1,10 +1,9 @@
-import { useRef } from 'react';
+import { useCallback, useRef } from 'react';
 import { ColumnDef, flexRender, getCoreRowModel, useReactTable } from '@tanstack/react-table';
 import Color from 'color';
 import { isOntimeBlock, isOntimeDelay, isOntimeEvent, OntimeRundown, OntimeRundownEntry } from 'ontime-types';
 
 import useFollowComponent from '../../common/hooks/useFollowComponent';
-import { useLocalStorage } from '../../common/hooks/useLocalStorage';
 import { getAccessibleColour } from '../../common/utils/styleUtils';
 
 import BlockRow from './cuesheet-table-elements/BlockRow';
@@ -13,7 +12,7 @@ import DelayRow from './cuesheet-table-elements/DelayRow';
 import EventRow from './cuesheet-table-elements/EventRow';
 import CuesheetTableSettings from './cuesheet-table-settings/CuesheetTableSettings';
 import { useCuesheetSettings } from './store/CuesheetSettings';
-import { initialColumnOrder } from './cuesheetCols';
+import useColumnManager from './useColumnManager';
 
 import style from './Cuesheet.module.scss';
 
@@ -25,11 +24,17 @@ interface CuesheetProps {
 }
 
 export default function Cuesheet({ data, columns, handleUpdate, selectedId }: CuesheetProps) {
-  const { followSelected, showSettings, showDelayBlock, showPrevious } = useCuesheetSettings();
+  const { followSelected, showSettings, showDelayBlock, showPrevious, showIndexColumn } = useCuesheetSettings();
 
-  const [columnVisibility, setColumnVisibility] = useLocalStorage('table-hidden', {});
-  const [columnOrder, saveColumnOrder] = useLocalStorage<string[]>('table-order', initialColumnOrder);
-  const [columnSizing, setColumnSizing] = useLocalStorage('table-sizes', {});
+  const {
+    columnVisibility,
+    columnOrder,
+    columnSizing,
+    resetColumnOrder,
+    setColumnVisibility,
+    saveColumnOrder,
+    setColumnSizing,
+  } = useColumnManager(columns);
 
   const selectedRef = useRef<HTMLTableRowElement | null>(null);
   const tableContainerRef = useRef<HTMLDivElement | null>(null);
@@ -52,10 +57,6 @@ export default function Cuesheet({ data, columns, handleUpdate, selectedId }: Cu
     getCoreRowModel: getCoreRowModel(),
   });
 
-  const resetColumnOrder = () => {
-    saveColumnOrder(initialColumnOrder);
-  };
-
   const setAllVisible = () => {
     table.toggleAllColumnsVisible(true);
   };
@@ -63,6 +64,26 @@ export default function Cuesheet({ data, columns, handleUpdate, selectedId }: Cu
   const resetColumnResizing = () => {
     setColumnSizing({});
   };
+
+  const reorder = useCallback(
+    (fromId: string, toId: string) => {
+      // get index of from
+      const fromIndex = columnOrder.indexOf(fromId);
+
+      // get index of to
+      const toIndex = columnOrder.indexOf(toId);
+
+      if (toIndex === -1) {
+        return;
+      }
+
+      const reorderedCols = [...columnOrder];
+      const reorderedItem = reorderedCols.splice(fromIndex, 1);
+      reorderedCols.splice(toIndex, 0, reorderedItem[0]);
+      saveColumnOrder(reorderedCols);
+    },
+    [columnOrder, saveColumnOrder],
+  );
 
   const headerGroups = table.getHeaderGroups();
   const rowModel = table.getRowModel();
@@ -83,7 +104,7 @@ export default function Cuesheet({ data, columns, handleUpdate, selectedId }: Cu
       )}
       <div ref={tableContainerRef} className={style.cuesheetContainer}>
         <table className={style.cuesheet}>
-          <CuesheetHeader headerGroups={headerGroups} />
+          <CuesheetHeader headerGroups={headerGroups} saveColumnOrder={reorder} showIndexColumn={showIndexColumn} />
           <tbody>
             {rowModel.rows.map((row) => {
               const key = row.original.id;
@@ -136,6 +157,7 @@ export default function Cuesheet({ data, columns, handleUpdate, selectedId }: Cu
                     selectedRef={isSelected ? selectedRef : undefined}
                     skip={row.original.skip}
                     colour={row.original.colour}
+                    showIndexColumn={showIndexColumn}
                   >
                     {row.getVisibleCells().map((cell) => {
                       return (

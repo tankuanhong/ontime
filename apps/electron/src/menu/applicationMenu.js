@@ -18,7 +18,7 @@ function getApplicationMenu(isMac, askToQuit, urlBase) {
               { role: 'unhide' },
               { type: 'separator' },
               {
-                label: 'quit',
+                label: 'Quit',
                 click: () => askToQuit(),
                 accelerator: 'Cmd+Q',
               },
@@ -124,7 +124,7 @@ function getApplicationMenu(isMac, askToQuit, urlBase) {
             {
               label: 'Operator',
               click: async () => {
-                await shell.openExternal(`${urlBase}/operator`);
+                await shell.openExternal(`${urlBase}/op`);
               },
             },
           ],
